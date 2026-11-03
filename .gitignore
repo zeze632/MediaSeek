@@ -1,0 +1,25 @@
+# ===== 密钥与本地环境，绝对不能提交 =====
+api_key.txt
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# ===== 体积过大，不入库（克隆后按 README 自行准备）=====
+# 6.5 GB 原始素材 + 标注表里的 xlsx 单独保留，见下方例外规则
+多模态数据/**/*
+!多模态数据/**/
+!多模态数据/**/*.xlsx
+
+# 2.2 GB 的 BGE-M3 权重，从 HuggingFace 下（BAAI/bge-m3）
+bge-m3/
+
+# ChromaDB 持久化目录，可用 向量库/*.json 重新生成
+chroma_db/
+
+# ===== 系统与编辑器杂项 =====
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

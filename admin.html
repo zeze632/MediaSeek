@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>索骥 MediaSeek · 数据入库</title>
+<script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Microsoft YaHei', sans-serif; background: #f5f5f5; color: #333; min-height: 100vh; }
+.header { background: #fff; padding: 20px; text-align: center; border-bottom: 1px solid #e0e0e0; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+.header h1 { font-size: 22px; font-weight: 500; }
+.header a { font-size: 14px; color: #1a73e8; text-decoration: none; margin-left: 12px; }
+.container { max-width: 560px; margin: 0 auto; padding: 24px 16px; }
+.form-group { margin-bottom: 20px; }
+.form-group label { display: block; font-size: 14px; font-weight: 500; margin-bottom: 6px; color: #555; }
+.form-group input, .form-group textarea, .form-group select {
+  width: 100%; padding: 10px 12px; font-size: 14px; border: 2px solid #e0e0e0;
+  border-radius: 8px; outline: none; font-family: inherit;
+}
+.form-group input:focus, .form-group textarea:focus { border-color: #1a73e8; }
+.form-group textarea { resize: vertical; min-height: 80px; }
+.file-drop { border: 2px dashed #ccc; padding: 30px 20px; text-align: center; cursor: pointer; border-radius: 8px; transition: 0.2s; }
+.file-drop:hover, .file-drop.drag-over { border-color: #1a73e8; background: #e3f2fd; }
+.file-drop p { color: #888; font-size: 14px; }
+.file-drop .filename { color: #1a73e8; font-weight: 500; margin-top: 6px; }
+.btn { padding: 12px 0; width: 100%; font-size: 16px; border: none; border-radius: 8px; background: #1a73e8; color: #fff; cursor: pointer; }
+.btn:hover { background: #1557b0; }
+.btn:disabled { background: #999; cursor: not-allowed; }
+@media (max-width: 768px) { .container { max-width: 100%; padding: 12px; } .header { padding: 12px 8px; } }
+.result { margin-top: 20px; padding: 16px; border-radius: 8px; display: none; }
+.result.show { display: block; }
+.result.success { background: #e8f5e9; border: 1px solid #a5d6a7; }
+.result.error { background: #ffebee; border: 1px solid #ef9a9a; color: #c62828; }
+.preview { margin-top: 12px; text-align: center; }
+.preview img { max-width: 100%; max-height: 300px; border-radius: 6px; }
+.info { font-size: 13px; color: #666; margin-bottom: 20px; padding: 12px; background: #e3f2fd; border-radius: 8px; }
+.reset-btn { background: #fff; color: #1a73e8; border: 1px solid #1a73e8; margin-top: 8px; }
+.reset-btn:hover { background: #e3f2fd; }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <div class="header">
+    <h1>索骥 MediaSeek · 数据入库 <a href="/">检索</a> <a href="/chat">对话</a></h1>
+  </div>
+
+  <div class="container">
+    <div class="info">上传文件 + 填写描述 → 自动编码 → 存入向量数据库</div>
+
+    <div class="form-group">
+      <label>数据类型</label>
+      <select v-model="fileType">
+        <option value="image">图片</option>
+        <option value="video">视频</option>
+        <option value="audio">音频</option>
+        <option value="pdf">PDF</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label>选择文件（支持拖拽）</label>
+      <div class="file-drop" @click="$refs.fileInput.click()" @dragover.prevent @dragenter.prevent @drop.prevent="onDrop"
+           :class="{ 'drag-over': dragOver }" @dragenter="dragOver=true" @dragleave="dragOver=false">
+        <p v-if="!selectedFile">拖拽文件到此处，或点击选择</p>
+        <p v-else class="filename">{{ selectedFile.name }} ({{ formatSize(selectedFile.size) }})</p>
+      </div>
+      <input type="file" ref="fileInput" @change="onFileChange" style="display:none">
+      <div class="preview">
+        <img v-if="previewUrl" :src="previewUrl">
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>主描述（必填，一句话概括）</label>
+      <textarea v-model="mainDesc" placeholder="如：第137届广交会精品展示区的广彩瓷绘制"></textarea>
+    </div>
+
+    <div class="form-group">
+      <label>详细描述（可选）</label>
+      <textarea v-model="subDesc" placeholder="如：工艺师在精品展示区现场进行广彩瓷绘制..."></textarea>
+    </div>
+
+    <button class="btn" @click="doUpload" :disabled="uploading || !selectedFile || !mainDesc.trim()">
+      {{ uploading ? '上传中 ' + uploadProgress + '%' : '提交入库' }}
+    </button>
+    <button class="btn reset-btn" @click="resetForm" :disabled="uploading">重置</button>
+
+    <div :class="['result', 'show', resultType]">{{ resultMsg }}</div>
+  </div>
+</div>
+
+<script>
+const { createApp } = Vue
+
+createApp({
+  data() {
+    return {
+      fileType: 'image',
+      selectedFile: null, previewUrl: '', dragOver: false,
+      mainDesc: '', subDesc: '',
+      uploading: false, uploadProgress: 0,
+      resultMsg: '', resultType: '',
+      MAX_SIZE: 50 * 1024 * 1024,
+    }
+  },
+  mounted() {
+    window.addEventListener('keydown', this.onKeyDown)
+  },
+  beforeUnmount() {
+    window.removeEventListener('keydown', this.onKeyDown)
+  },
+  methods: {
+    onFileChange(e) {
+      this.selectedFile = e.target.files[0] || null
+      this.showPreview()
+    },
+    onDrop(e) {
+      this.dragOver = false
+      const file = e.dataTransfer.files[0]
+      if (file) { this.selectedFile = file; this.showPreview() }
+    },
+    showPreview() {
+      this.previewUrl = ''
+      if (!this.selectedFile) return
+      if (this.fileType === 'image') {
+        const reader = new FileReader()
+        reader.onload = e => { this.previewUrl = e.target.result }
+        reader.readAsDataURL(this.selectedFile)
+      }
+    },
+    async doUpload() {
+      const file = this.selectedFile, type = this.fileType
+      const mainDesc = this.mainDesc.trim(), subDesc = this.subDesc.trim()
+      if (!file) { this.showResult('请选择文件', 'error'); return }
+      if (file.size > this.MAX_SIZE) { this.showResult('文件超过50MB限制', 'error'); return }
+      if (!mainDesc) { this.showResult('请填写主描述', 'error'); return }
+
+      this.uploading = true; this.uploadProgress = 0
+      const formData = new FormData()
+      formData.append('file', file); formData.append('type', type)
+      formData.append('main_desc', mainDesc); formData.append('sub_desc', subDesc)
+
+      try {
+        const xhr = new XMLHttpRequest()
+        const result = await new Promise((resolve, reject) => {
+          xhr.open('POST', '/upload')
+          xhr.upload.onprogress = e => {
+            if (e.lengthComputable) this.uploadProgress = Math.round(e.loaded / e.total * 100)
+          }
+          xhr.onload = () => resolve(JSON.parse(xhr.responseText))
+          xhr.onerror = () => reject(new Error('网络错误'))
+          xhr.send(formData)
+        })
+        if (result.error) { this.showResult(result.error, 'error') }
+        else {
+          this.showResult('入库成功！ID: ' + result.id + '，文件名: ' + result.file_name, 'success')
+          this.resetForm()
+        }
+      } catch (e) {
+        this.showResult('' + e, 'error')
+      }
+      this.uploading = false
+    },
+    showResult(msg, type) { this.resultMsg = msg; this.resultType = type },
+    resetForm() {
+      this.selectedFile = null; this.previewUrl = ''
+      this.mainDesc = ''; this.subDesc = ''
+      this.$refs.fileInput.value = ''
+      this.resultMsg = ''; this.resultType = ''
+    },
+    formatSize(bytes) {
+      if (bytes < 1024) return bytes + 'B'
+      if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + 'KB'
+      return (bytes/1024/1024).toFixed(1) + 'MB'
+    },
+    onKeyDown(e) { if (e.key === 'Escape' && this.resultMsg) this.resultMsg = '' },
+  }
+}).mount('#app')
+</script>
+</body>
+</html>
